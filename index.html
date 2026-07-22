@@ -249,31 +249,6 @@ function createGame() {
         });
     });
 }
-    
-    p.on('connect', () => {
-        if(mqttClient) mqttClient.end();
-        conn = p;
-        connected = true;
-        document.getElementById('menu').style.display='none';
-        document.getElementById('game').style.display='block';
-        document.getElementById('deathScreen').style.display='none';
-        generateMap();
-        const mPos=getSniperPos('left'), ePos=getSniperPos('right');
-        state.players.me.x=mPos.x; state.players.me.y=mPos.y;
-        state.players.enemy.x=ePos.x; state.players.enemy.y=ePos.y;
-        send({type:'start', mapSeed:state.mapSeed, myX:ePos.x, myY:ePos.y, enemyX:mPos.x, enemyY:mPos.y});
-        updateHUD();
-        p.on('data', (d) => handleData(JSON.parse(d.toString())));
-        p.on('close', () => { if(connected) { alert('Противник отключился'); location.reload(); } });
-    });
-    
-    p.on('error', () => {
-        document.getElementById('menuMain').innerHTML=`
-            <div class="status error">Ошибка соединения</div>
-            <button class="btn btn-create" onclick="location.reload()">Попробовать снова</button>
-        `;
-    });
-}
 
 function joinGame() {
     const code = document.getElementById('joinInput').value.trim().toUpperCase();
