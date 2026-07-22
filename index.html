@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sniper Battle</title>
 <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.3.6/dist/mqtt.min.js"></script>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; user-select:none; }
 body { background:#0a0a0f; color:#fff; font-family:Arial,sans-serif; overflow:hidden; height:100vh; display:flex; align-items:center; justify-content:center; }
@@ -155,33 +156,59 @@ function generateMap() {
 function getSniperPos(s){const g=mapData.groundY;return s==='left'?{x:50+Math.random()*60,y:g-140-Math.random()*60}:{x:W-50-Math.random()*60,y:g-140-Math.random()*60};}
 
 // ====================================================
-// SIMPLEPEER MANUAL CONNECTION
+// MQTT SIGNALING + SIMPLEPEER
 // ====================================================
+const MQTT_URL = 'wss://broker.emqx.io:8084/mqtt';
+let mqttClient = null;
+let roomCode = '';
+
+function generateRoomCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for(let i=0;i<5;i++) code += chars[Math.floor(Math.random()*chars.length)];
+    return code;
+}
+
 function createGame() {
     isHost = true;
+    roomCode = generateRoomCode();
     document.getElementById('menuMain').innerHTML=`
-        <div class="status info">Шаг 1: Создаём подключение...</div>
+        <div style="color:#888;">Код комнаты:</div>
+        <div id="roomCode">${roomCode}</div>
+        <button class="btn btn-copy" onclick="copyCode()">Копировать код</button>
         <div id="waitingAnim"></div>
+        <div class="status info">Ожидаем противника...</div>
+        <button class="btn btn-join" style="margin-top:15px;" onclick="location.reload()">Назад</button>
     `;
+    
+    mqttClient = mqtt.connect(MQTT_URL);
+    mqttClient.on('connect', () => {
+        mqttClient.subscribe('sniper/' + roomCode + '/answer');
+        mqttClient.on('message', (topic, msg) => {
+            const data = JSON.parse(msg.toString());
+            if(topic === 'sniper/' + roomCode + '/answer') {
+                peer.signal(data.sdp);
+            }
+        });
+    });
+    mqttClient.on('error', () => {
+        document.getElementById('menuMain').innerHTML=`
+            <div class="status error">Ошибка подключения к серверу</div>
+            <button class="btn btn-create" onclick="location.reload()">Попробовать снова</button>
+        `;
+    });
     
     const p = new SimplePeer({ initiator: true, config: { iceServers } });
     peer = p;
     
     p.on('signal', (data) => {
-        const offer = JSON.stringify(data);
-        document.getElementById('menuMain').innerHTML=`
-            <div style="color:#4ecca3;font-size:14px;margin-bottom:10px;">✓ Канал создан!</div>
-            <div style="color:#888;font-size:12px;margin-bottom:5px;">1. Скопируй этот код и отправь другу:</div>
-            <textarea id="offerText" readonly style="width:100%;height:80px;background:#1a1a2e;color:#fff;border:1px solid #0f3460;border-radius:8px;padding:8px;font-size:11px;word-break:break-all;resize:none;">${offer}</textarea>
-            <button class="btn btn-copy" onclick="copyText('offerText')" style="margin-bottom:10px;">Копировать код</button>
-            <div style="color:#888;font-size:12px;margin-bottom:5px;">2. Вставь ответ от друга сюда:</div>
-            <textarea id="answerInput" style="width:100%;height:80px;background:#1a1a2e;color:#fff;border:1px solid #0f3460;border-radius:8px;padding:8px;font-size:11px;word-break:break-all;resize:none;" placeholder="Вставь ответ друга..."></textarea>
-            <button class="btn btn-join" onclick="submitAnswer()">Подключиться</button>
-            <button class="btn" style="background:#2d2d44;color:#fff;margin-top:10px;font-size:12px;" onclick="location.reload()">Назад</button>
-        `;
+        if(data.type === 'offer' && mqttClient && mqttClient.connected) {
+            mqttClient.publish('sniper/' + roomCode + '/offer', JSON.stringify({ sdp: data }));
+        }
     });
     
     p.on('connect', () => {
+        if(mqttClient) mqttClient.end();
         conn = p;
         connected = true;
         document.getElementById('menu').style.display='none';
@@ -205,90 +232,79 @@ function createGame() {
     });
 }
 
-function submitAnswer() {
-    const answer = document.getElementById('answerInput').value.trim();
-    if(!answer) return;
-    try {
-        peer.signal(JSON.parse(answer));
-        document.getElementById('menuMain').innerHTML='<div id="waitingAnim"></div><div class="status info">Подключаемся...</div>';
-    } catch(e) {
-        document.getElementById('menuMain').innerHTML=`
-            <div class="status error">Неверный формат ответа</div>
-            <button class="btn btn-join" onclick="location.reload()">Назад</button>
-        `;
-    }
-}
-
 function joinGame() {
+    const code = document.getElementById('joinInput').value.trim().toUpperCase();
+    if(code.length<3){ setStatus('Введи код комнаты'); return; }
+    
     isHost = false;
-    document.getElementById('menuMain').innerHTML=`
-        <div style="color:#888;font-size:12px;margin-bottom:10px;">Вставь код приглашения от друга:</div>
-        <textarea id="offerInput" style="width:100%;height:80px;background:#1a1a2e;color:#fff;border:1px solid #0f3460;border-radius:8px;padding:8px;font-size:11px;word-break:break-all;resize:none;" placeholder="Вставь код друга..."></textarea>
-        <button class="btn btn-join" onclick="submitOffer()">Далее</button>
-        <button class="btn" style="background:#2d2d44;color:#fff;margin-top:10px;font-size:12px;" onclick="location.reload()">Назад</button>
-    `;
-}
-
-function submitOffer() {
-    const offerStr = document.getElementById('offerInput').value.trim();
-    if(!offerStr) return;
+    roomCode = code;
+    document.getElementById('menuMain').innerHTML='<div id="waitingAnim"></div><div class="status info">Подключение...</div>';
     
-    document.getElementById('menuMain').innerHTML='<div id="waitingAnim"></div><div class="status info">Подключаемся...</div>';
-    
-    let offerData;
-    try { offerData = JSON.parse(offerStr); } catch(e) {
+    mqttClient = mqtt.connect(MQTT_URL);
+    mqttClient.on('error', () => {
         document.getElementById('menuMain').innerHTML=`
-            <div class="status error">Неверный формат кода</div>
+            <div class="status error">Ошибка подключения к серверу</div>
             <button class="btn btn-join" onclick="location.reload()">Назад</button>
-        `;
-        return;
-    }
-    
-    const p = new SimplePeer({ initiator: false, config: { iceServers } });
-    peer = p;
-    
-    p.on('signal', (data) => {
-        const answer = JSON.stringify(data);
-        document.getElementById('menuMain').innerHTML=`
-            <div style="color:#4ecca3;font-size:14px;margin-bottom:10px;">✓ Подключение создано!</div>
-            <div style="color:#888;font-size:12px;margin-bottom:5px;">Отправь этот код обратно другу:</div>
-            <textarea id="answerText" readonly style="width:100%;height:80px;background:#1a1a2e;color:#fff;border:1px solid #0f3460;border-radius:8px;padding:8px;font-size:11px;word-break:break-all;resize:none;">${answer}</textarea>
-            <button class="btn btn-copy" onclick="copyText('answerText')">Копировать код</button>
-            <div id="waitingAnim" style="margin-top:15px;"></div>
-            <div class="status info">Ожидаем подтверждения...</div>
-            <button class="btn" style="background:#2d2d44;color:#fff;margin-top:10px;font-size:12px;" onclick="location.reload()">Назад</button>
         `;
     });
-    
-    p.on('connect', () => {
-        conn = p;
-        connected = true;
-        p.on('data', (d) => {
-            const data = JSON.parse(d.toString());
-            if(data.type==='start') {
-                state.mapSeed = data.mapSeed;
-                state.players.me.x=data.myX; state.players.me.y=data.myY;
-                state.players.enemy.x=data.enemyX; state.players.enemy.y=data.enemyY;
-                document.getElementById('menu').style.display='none';
-                document.getElementById('game').style.display='block';
-                document.getElementById('deathScreen').style.display='none';
-                generateMap();
-                updateHUD();
-            } else {
-                handleData(data);
+    mqttClient.on('connect', () => {
+        mqttClient.subscribe('sniper/' + roomCode + '/offer');
+        mqttClient.on('message', (topic, msg) => {
+            const data = JSON.parse(msg.toString());
+            if(topic === 'sniper/' + roomCode + '/offer') {
+                if(!peer) {
+                    const p = new SimplePeer({ initiator: false, config: { iceServers } });
+                    peer = p;
+                    
+                    p.on('signal', (sdata) => {
+                        if(sdata.type === 'answer' && mqttClient && mqttClient.connected) {
+                            mqttClient.publish('sniper/' + roomCode + '/answer', JSON.stringify({ sdp: sdata }));
+                        }
+                    });
+                    
+                    p.on('connect', () => {
+                        if(mqttClient) mqttClient.end();
+                        conn = p;
+                        connected = true;
+                        p.on('data', (d) => {
+                            const ddata = JSON.parse(d.toString());
+                            if(ddata.type==='start') {
+                                state.mapSeed = ddata.mapSeed;
+                                state.players.me.x=ddata.myX; state.players.me.y=ddata.myY;
+                                state.players.enemy.x=ddata.enemyX; state.players.enemy.y=ddata.enemyY;
+                                document.getElementById('menu').style.display='none';
+                                document.getElementById('game').style.display='block';
+                                document.getElementById('deathScreen').style.display='none';
+                                generateMap();
+                                updateHUD();
+                            } else {
+                                handleData(ddata);
+                            }
+                        });
+                        p.on('close', () => { if(connected) { alert('Противник отключился'); location.reload(); } });
+                    });
+                    
+                    p.on('error', () => {
+                        document.getElementById('menuMain').innerHTML=`
+                            <div class="status error">Ошибка соединения</div>
+                            <button class="btn btn-join" onclick="location.reload()">Назад</button>
+                        `;
+                    });
+                }
+                peer.signal(data.sdp);
             }
         });
-        p.on('close', () => { if(connected) { alert('Противник отключился'); location.reload(); } });
+        
+        // Timeout if no offer received
+        setTimeout(() => {
+            if(!peer) {
+                document.getElementById('menuMain').innerHTML=`
+                    <div class="status error">Не удалось подключиться. Проверь код.</div>
+                    <button class="btn btn-join" onclick="location.reload()">Назад</button>
+                `;
+            }
+        }, 15000);
     });
-    
-    p.on('error', () => {
-        document.getElementById('menuMain').innerHTML=`
-            <div class="status error">Ошибка соединения</div>
-            <button class="btn btn-join" onclick="location.reload()">Назад</button>
-        `;
-    });
-    
-    p.signal(offerData);
 }
 
 function handleData(data) {
@@ -308,8 +324,8 @@ function handleData(data) {
 
 function send(d) { if(peer&&peer.connected) { try { peer.send(JSON.stringify(d)); } catch(e) {} } }
 
-function copyText(id) {
-    const el=document.getElementById(id);
+function copyCode() {
+    const el=document.getElementById('roomCode');
     if(el) { navigator.clipboard.writeText(el.textContent).catch(()=>{}); }
 }
 
