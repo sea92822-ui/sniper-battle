@@ -161,10 +161,16 @@ function getSniperPos(s){const g=mapData.groundY;return s==='left'?{x:50+Math.ra
 // ====================================================
 // MQTT SIGNALING + SIMPLEPEER
 // ====================================================
-const MQTT_URLS = ['wss://broker.emqx.io:8084/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
+const MQTT_URLS = [
+    'wss://broker.emqx.io:8084/mqtt',
+    'wss://test.mosquitto.org:8081/mqtt',
+    'wss://mqtt.eclipseprojects.io:443/mqtt',
+    'wss://broker.hivemq.com:8000/mqtt'
+];
 let mqttClient = null;
 let roomCode = '';
 let mqttUrlIndex = 0;
+let mqttConnecting = false;
 
 function generateRoomCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -174,19 +180,34 @@ function generateRoomCode() {
 }
 
 function connectMQTT(onConnected) {
-    mqttClient = mqtt.connect(MQTT_URLS[mqttUrlIndex]);
-    mqttClient.on('connect', onConnected);
-    mqttClient.on('error', () => {
+    if(mqttConnecting) return;
+    mqttConnecting = true;
+    
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; tryNext(); }, 8000);
+    
+    function tryNext() {
+        if(mqttClient) { try { mqttClient.end(true); } catch(e) {} }
         mqttUrlIndex++;
         if(mqttUrlIndex < MQTT_URLS.length) {
+            mqttConnecting = false;
             connectMQTT(onConnected);
         } else {
+            mqttConnecting = false;
             document.getElementById('menuMain').innerHTML=`
                 <div class="status error">Ошибка подключения к серверу</div>
                 <button class="btn btn-create" onclick="location.reload()">Попробовать снова</button>
             `;
         }
+    }
+    
+    mqttClient = mqtt.connect(MQTT_URLS[mqttUrlIndex], { connectTimeout: 7000 });
+    mqttClient.on('connect', () => {
+        clearTimeout(timer);
+        mqttConnecting = false;
+        onConnected();
     });
+    mqttClient.on('error', () => { if(!timedOut) { timedOut = true; tryNext(); } });
 }
 
 function createGame() {
