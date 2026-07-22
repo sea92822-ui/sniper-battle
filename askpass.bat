@@ -1,0 +1,2 @@
+@echo off
+echo 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

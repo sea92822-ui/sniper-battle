@@ -152,11 +152,19 @@ function getSniperPos(s){const g=mapData.groundY;return s==='left'?{x:50+Math.ra
 // ====================================================
 // PEERJS
 // ====================================================
+function generateRoomCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for(let i=0;i<5;i++) code += chars[Math.floor(Math.random()*chars.length)];
+    return code;
+}
+
 function createGame() {
     if(peer) peer.destroy();
+    const roomCode = generateRoomCode();
     document.getElementById('menuMain').innerHTML='<div id="waitingAnim"></div><div class="status info">Создание комнаты...</div>';
     
-    peer = new Peer(undefined, {
+    peer = new Peer(roomCode, {
         host: '0.peerjs.com', port: 443, path: '/',
         config: { iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -167,10 +175,10 @@ function createGame() {
     
     peer.on('open', (id) => {
         isHost = true;
-        gameId = id.substring(0,5).toUpperCase();
+        gameId = id;
         document.getElementById('menuMain').innerHTML=`
             <div style="color:#888;">Код комнаты:</div>
-            <div id="roomCode">${gameId}</div>
+            <div id="roomCode">${id}</div>
             <button class="btn btn-copy" onclick="copyCode()">Копировать код</button>
             <div id="waitingAnim"></div>
             <div class="status info">Ожидаем противника...</div>
@@ -184,6 +192,11 @@ function createGame() {
     });
     
     peer.on('error', (err) => {
+        // If code taken, regenerate
+        if(err.type === 'unavailable-id') {
+            createGame();
+            return;
+        }
         document.getElementById('menuMain').innerHTML=`
             <div class="status error">Ошибка: ${err.type}</div>
             <button class="btn btn-create" onclick="location.reload()">Попробовать снова</button>
@@ -208,66 +221,17 @@ function joinGame() {
     });
     
     peer.on('open', () => {
-        // Search for the host by ID prefix
-        const allChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789';
-        let found = false;
-        
-        function tryConnect(prefix) {
-            if(found || prefix.length > 6) return;
-            const pid = prefix + gameId.substring(prefix.length);
-            
-            const c = peer.connect(pid, { timeout: 3000 });
-            c.on('open', () => {
-                found = true;
-                conn = c;
-                conn.peer = pid;
-                setupConnection();
-            });
-            c.on('error', () => {
-                // Try next combination
-            });
-            
-            setTimeout(() => {
-                if(!found) {
-                    // Try next prefix
-                    for(const ch of allChars) {
-                        tryConnect(prefix + ch);
-                    }
-                }
-            }, 100);
-        }
-        
-        // The host's peer ID starts with their room code
-        // But since we don't know the full ID, we connect using the code as prefix
-        // Actually, PeerJS doesn't support prefix search. Need a different approach.
-        
-        // Alternative: The host's ID starts with the game code.
-        // We know the first 5 chars. The rest is random.
-        // We can't brute-force this.
-        
-        // Simple approach: connect directly - the user needs the exact peer ID
-        const c = peer.connect(code.toLowerCase() + '_sniper');
+        const c = peer.connect(code);
         c.on('open', () => {
-            found = true;
             conn = c;
-            conn.peer = code.toLowerCase() + '_sniper';
+            conn.peer = code;
             setupConnection();
         });
         c.on('error', () => {
-            // Try without suffix
-            const c2 = peer.connect(code.toLowerCase());
-            c2.on('open', () => {
-                found = true;
-                conn = c2;
-                conn.peer = code.toLowerCase();
-                setupConnection();
-            });
-            c2.on('error', () => {
-                document.getElementById('menuMain').innerHTML=`
-                    <div class="status error">Не удалось подключиться. Проверь код.</div>
-                    <button class="btn btn-join" onclick="location.reload()">Назад</button>
-                `;
-            });
+            document.getElementById('menuMain').innerHTML=`
+                <div class="status error">Не удалось подключиться. Проверь код.</div>
+                <button class="btn btn-join" onclick="location.reload()">Назад</button>
+            `;
         });
     });
     
